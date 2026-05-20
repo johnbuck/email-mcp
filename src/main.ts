@@ -11,9 +11,9 @@
  *   scheduler Email scheduling management
  */
 
-import { createServer as createHttpServer } from 'node:http';
-import type { IncomingMessage, ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createServer as createHttpServer } from 'node:http';
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -160,7 +160,7 @@ async function runServer(): Promise<void> {
   process.on('SIGTERM', shutdown);
 }
 
-function readBody(req: IncomingMessage): Promise<Buffer> {
+async function readBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -233,7 +233,13 @@ async function runHttpServer(port: number): Promise<void> {
           body = JSON.parse(raw.toString());
         } catch {
           res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' }, id: null }));
+          res.end(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              error: { code: -32700, message: 'Parse error' },
+              id: null,
+            }),
+          );
           return;
         }
       }
@@ -241,36 +247,41 @@ async function runHttpServer(port: number): Promise<void> {
 
     const sessionIdHeader = req.headers['mcp-session-id'];
     const sessionId = Array.isArray(sessionIdHeader) ? sessionIdHeader[0] : sessionIdHeader;
-    let transport: StreamableHTTPServerTransport | undefined;
+    let transport: StreamableHTTPServerTransport;
 
-    if (sessionId && transports.has(sessionId)) {
-      transport = transports.get(sessionId);
+    const existing = sessionId ? transports.get(sessionId) : undefined;
+    if (existing) {
+      transport = existing;
     } else if (!sessionId && req.method === 'POST' && isInitializeRequest(body)) {
-      transport = new StreamableHTTPServerTransport({
+      const newTransport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (sid) => {
-          transports.set(sid, transport!);
+          transports.set(sid, newTransport);
         },
       });
-      transport.onclose = () => {
-        const sid = transport!.sessionId;
+      newTransport.onclose = () => {
+        const sid = newTransport.sessionId;
         if (sid) transports.delete(sid);
       };
       const mcpServer = buildMcpSession();
-      await mcpServer.connect(transport);
+      await mcpServer.connect(newTransport);
+      transport = newTransport;
     } else {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(
         JSON.stringify({
           jsonrpc: '2.0',
-          error: { code: -32000, message: 'Bad Request: provide mcp-session-id or send an initialize request' },
+          error: {
+            code: -32000,
+            message: 'Bad Request: provide mcp-session-id or send an initialize request',
+          },
           id: null,
         }),
       );
       return;
     }
 
-    await transport!.handleRequest(req, res, body);
+    await transport.handleRequest(req, res, body);
   });
 
   await watcherService.start();
@@ -306,13 +317,8 @@ async function runHttpServer(port: number): Promise<void> {
     clearInterval(checkInterval);
     hooksService.stop();
     await watcherService.stop();
-    for (const t of transports.values()) {
-      try {
-        await t.close();
-      } catch {
-        // Ignore
-      }
-    }
+    // Close all transports concurrently; errors are ignored individually.
+    await Promise.allSettled(Array.from(transports.values(), async (t) => t.close()));
     await connections.closeAll();
     httpServer.close();
   };
