@@ -60,7 +60,10 @@ jobs:
           prompt: ${{ github.event.inputs.prompt || '' }}
           # Sign commits via the GitHub API so Claude's pushes are "Verified".
           use_commit_signing: true
-          # Cap turns + pin model. Bump model when a newer GA Sonnet ships.
+          # Cap turns + pin model. Haiku 4.5 is the working choice on the
+          # Max OAuth token here; Sonnet 4.6 hit a persistent 429 quota
+          # ceiling that the SDK surfaces as "401 Invalid bearer token".
+          # Swap to claude-sonnet-4-6 when quota or API-key billing allows.
           claude_args: |
             --max-turns 10
-            --model claude-sonnet-4-6
+            --model claude-haiku-4-5-20251001
