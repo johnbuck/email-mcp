@@ -1,0 +1,66 @@
+---
+name: claude
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened, assigned]
+  pull_request_review:
+    types: [submitted]
+  # Manual fallback for ad-hoc runs from the Actions tab (default branch only).
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: Instruction for Claude (free text).
+        required: true
+        default: Summarise the repository structure and call out anything unusual.
+
+# Least-privilege. id-token: write is required by the action even with
+# OAuth-token auth — it calls the GitHub OIDC endpoint to mint a
+# short-lived GitHub token regardless of how Anthropic auth is set up.
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+# Serialise per-actor-per-issue. The actor key matters: when Claude
+# posts its "I'm working…" ack comment, that comment fires another
+# issue_comment event from `claude[bot]`. Without partitioning by actor,
+# `cancel-in-progress` would cancel Claude's own in-flight reply run.
+concurrency:
+  group: claude-${{ github.actor }}-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  claude:
+    # Only run when @claude is explicitly mentioned, to avoid spend on unrelated activity.
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Empty for comment-triggered runs (auto-detect from @claude mention).
+          # Populated for workflow_dispatch runs from the operator's input.
+          prompt: ${{ github.event.inputs.prompt || '' }}
+          # Sign commits via the GitHub API so Claude's pushes are "Verified".
+          use_commit_signing: true
+          # Cap turns + pin model. Bump model when a newer GA Sonnet ships.
+          claude_args: |
+            --max-turns 10
+            --model claude-sonnet-4-6
