@@ -18,13 +18,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
+      # v6 reads the pnpm version from package.json `packageManager`.
+      # v4 errored on the dual specification once pnpm/action-setup got
+      # stricter (`ERR_PNPM_BAD_PM_VERSION`), breaking CI since Feb 2026.
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - name: Install dependencies
