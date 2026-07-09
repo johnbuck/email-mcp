@@ -160,6 +160,24 @@ describe('SmtpService', () => {
       const call = transport.sendMail.mock.calls[0][0];
       expect(call).not.toHaveProperty('attachments');
     });
+
+    it('omits a malformed attachment content-type (invalid type/subtype)', async () => {
+      await service.sendEmail('test', {
+        to: ['recipient@example.com'],
+        subject: 'Bad type',
+        body: 'B',
+        attachments: [
+          {
+            filename: 'x.txt',
+            content_base64: Buffer.from('x').toString('base64'),
+            mime_type: 'text/plain/octet-stream',
+          },
+        ],
+      } as unknown as Parameters<typeof service.sendEmail>[1]);
+
+      const call = transport.sendMail.mock.calls[0][0];
+      expect(call.attachments[0]).not.toHaveProperty('contentType');
+    });
   });
 
   // spec: reply-attachment-preserves-threading
@@ -260,6 +278,46 @@ describe('SmtpService', () => {
         (a: { filename: string }) => a.filename === 'added.txt',
       );
       expect(added).toMatchObject({ content: newBase64, encoding: 'base64' });
+    });
+
+    // regression: real Proton IMAP round-trips can yield a malformed content-type
+    // like "text/plain/octet-stream" (two slashes). Forwarding it verbatim made the
+    // Proton bridge reject the message (554 "unexpected content after media subtype").
+    it('sanitizes a malformed original content-type so the forward is not rejected', async () => {
+      const imap = {
+        getEmail: vi.fn().mockResolvedValue({
+          id: '9',
+          messageId: '<fwd2@example.com>',
+          subject: 'Doc',
+          from: { address: 'sender@example.com' },
+          to: [{ address: 'test@example.com' }],
+          date: new Date().toISOString(),
+          bodyText: 'body',
+          attachments: [{ filename: 'note.txt', mimeType: 'text/plain/octet-stream', size: 5 }],
+        }),
+        downloadAttachment: vi.fn().mockResolvedValue({
+          filename: 'note.txt',
+          mimeType: 'text/plain/octet-stream',
+          size: 5,
+          contentBase64: Buffer.from('hello').toString('base64'),
+        }),
+        saveEmailAttachments: vi.fn(),
+      } as unknown as ImapService;
+      service = new SmtpService(connections, rateLimiter, imap);
+
+      await service.forwardEmail('test', {
+        emailId: '9',
+        to: ['dest@example.com'],
+        body: 'fwd',
+      } as unknown as Parameters<typeof service.forwardEmail>[1]);
+
+      const call = transport.sendMail.mock.calls[0][0];
+      const att = (call.attachments ?? []).find(
+        (a: { filename: string }) => a.filename === 'note.txt',
+      );
+      expect(att).toBeDefined();
+      // malformed type stripped → no contentType (nodemailer infers from filename)
+      expect(att).not.toHaveProperty('contentType');
     });
   });
 });

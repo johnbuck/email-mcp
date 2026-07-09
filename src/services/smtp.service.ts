@@ -17,14 +17,30 @@ interface MailAttachment {
   contentType?: string;
 }
 
+/**
+ * Return a valid `type/subtype` content-type (params stripped), or undefined if the
+ * value is malformed — e.g. the `text/plain/octet-stream` (two slashes) that an
+ * IMAP round-trip can yield. A malformed Content-Type is rejected by the Proton
+ * bridge's strict MIME parser ("unexpected content after media subtype"), so we omit
+ * it and let nodemailer infer a valid type from the filename instead.
+ */
+function sanitizeContentType(ct?: string): string | undefined {
+  if (!ct) return undefined;
+  const base = ct.split(';')[0].trim();
+  return /^[A-Za-z0-9][\w.+-]*\/[A-Za-z0-9][\w.+-]*$/.test(base) ? base : undefined;
+}
+
 /** Map inline-base64 attachments onto nodemailer's attachment shape. */
 function mapAttachments(attachments?: Attachment[]): MailAttachment[] {
-  return (attachments ?? []).map((a) => ({
-    filename: a.filename,
-    content: a.content_base64,
-    encoding: 'base64' as const,
-    ...(a.mime_type ? { contentType: a.mime_type } : {}),
-  }));
+  return (attachments ?? []).map((a) => {
+    const contentType = sanitizeContentType(a.mime_type);
+    return {
+      filename: a.filename,
+      content: a.content_base64,
+      encoding: 'base64' as const,
+      ...(contentType ? { contentType } : {}),
+    };
+  });
 }
 
 export default class SmtpService {
@@ -199,11 +215,12 @@ export default class SmtpService {
     settled.forEach((outcome, i) => {
       if (outcome.status === 'fulfilled') {
         const dl = outcome.value;
+        const contentType = sanitizeContentType(dl.mimeType);
         originalAttachments.push({
           filename: dl.filename,
           content: dl.contentBase64,
           encoding: 'base64',
-          ...(dl.mimeType ? { contentType: dl.mimeType } : {}),
+          ...(contentType ? { contentType } : {}),
         });
       } else {
         const reason =
