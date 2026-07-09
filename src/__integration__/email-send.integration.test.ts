@@ -3,6 +3,7 @@ import {
   buildSecondTestAccount,
   buildTestAccount,
   createTestServices,
+  seedEmailWithAttachment,
   TEST_ACCOUNT_NAME,
   waitForDelivery,
 } from './helpers/index.js';
@@ -73,6 +74,38 @@ describe('Email Send Operations', () => {
 
       expect(result.items.length).toBeGreaterThanOrEqual(1);
     });
+
+    // spec: send-attachment-roundtrips
+    it('should send an attachment that round-trips to the recipient byte-identically', async () => {
+      const payload = `attachment-payload-${'z'.repeat(200)}`;
+      const contentBase64 = Buffer.from(payload).toString('base64');
+
+      await services.smtpService.sendEmail(TEST_ACCOUNT_NAME, {
+        to: ['bob@localhost'],
+        subject: 'Attachment roundtrip test',
+        body: 'See attached.',
+        attachments: [
+          { filename: 'doc.txt', content_base64: contentBase64, mime_type: 'text/plain' },
+        ],
+      });
+
+      await waitForDelivery();
+
+      const list = await services.imapService.listEmails('integration-2', {
+        subject: 'Attachment roundtrip test',
+        hasAttachment: true,
+      });
+      expect(list.items.length).toBeGreaterThanOrEqual(1);
+
+      const downloaded = await services.imapService.downloadAttachment(
+        'integration-2',
+        list.items[0].id,
+        'INBOX',
+        'doc.txt',
+      );
+      const decoded = Buffer.from(downloaded.contentBase64, 'base64').toString('utf-8');
+      expect(decoded).toBe(payload);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -138,6 +171,45 @@ describe('Email Send Operations', () => {
       });
 
       expect(fwd.messageId).toBeTruthy();
+    });
+
+    // spec: forward-carries-original-attachments
+    it('should forward an email keeping its original attachment', async () => {
+      const original = `original-attachment-${'q'.repeat(120)}`;
+      await seedEmailWithAttachment('orig.txt', original, {
+        to: 'test@localhost',
+        subject: 'Forward-with-attachment original',
+      });
+
+      await waitForDelivery();
+
+      const inbox = await services.imapService.listEmails(TEST_ACCOUNT_NAME, {
+        subject: 'Forward-with-attachment original',
+        hasAttachment: true,
+      });
+      expect(inbox.items.length).toBeGreaterThanOrEqual(1);
+
+      await services.smtpService.forwardEmail(TEST_ACCOUNT_NAME, {
+        emailId: inbox.items[0].id,
+        to: ['bob@localhost'],
+        body: 'FYI, see attached.',
+      });
+
+      await waitForDelivery();
+
+      const forwarded = await services.imapService.listEmails('integration-2', {
+        subject: 'Fwd: Forward-with-attachment original',
+        hasAttachment: true,
+      });
+      expect(forwarded.items.length).toBeGreaterThanOrEqual(1);
+
+      const downloaded = await services.imapService.downloadAttachment(
+        'integration-2',
+        forwarded.items[0].id,
+        'INBOX',
+        'orig.txt',
+      );
+      expect(Buffer.from(downloaded.contentBase64, 'base64').toString('utf-8')).toBe(original);
     });
   });
 });

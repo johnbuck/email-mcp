@@ -166,3 +166,48 @@ describe('ImapService', () => {
     });
   });
 });
+
+// spec: download-cap-raised-to-25mb (default-cap unit half)
+describe('ImapService downloadAttachment size cap', () => {
+  async function* payloadChunks(): AsyncGenerator<Buffer> {
+    yield Buffer.from('payload-bytes');
+  }
+
+  function makeClient(attachmentSizeBytes: number) {
+    return {
+      getMailboxLock: vi.fn().mockResolvedValue({ release: vi.fn() }),
+      fetchOne: vi.fn().mockResolvedValue({
+        uid: 1,
+        bodyStructure: {
+          childNodes: [
+            {
+              disposition: 'attachment',
+              dispositionParameters: { filename: 'big.bin' },
+              type: 'application',
+              subtype: 'octet-stream',
+              size: attachmentSizeBytes,
+            },
+          ],
+        },
+      }),
+      download: vi.fn().mockResolvedValue({ content: payloadChunks() }),
+    };
+  }
+
+  function serviceFor(client: unknown): ImapService {
+    const connections = { getImapClient: vi.fn().mockResolvedValue(client) };
+    return new ImapService(connections as unknown as ConstructorParameters<typeof ImapService>[0]);
+  }
+
+  it('accepts an 8 MB attachment with the default cap (raised to 25 MB)', async () => {
+    const service = serviceFor(makeClient(8 * 1024 * 1024));
+    await expect(
+      service.downloadAttachment('test', '1', 'INBOX', 'big.bin'),
+    ).resolves.toMatchObject({ filename: 'big.bin' });
+  });
+
+  it('still rejects an attachment over the 25 MB cap', async () => {
+    const service = serviceFor(makeClient(26 * 1024 * 1024));
+    await expect(service.downloadAttachment('test', '1', 'INBOX', 'big.bin')).rejects.toThrow();
+  });
+});

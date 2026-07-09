@@ -72,6 +72,33 @@ describe('Advanced Email Operations', () => {
         expect(attachment.filename).toBe('image.png');
       }
     });
+
+    // spec: download-cap-raised-to-25mb (integration half)
+    it('should download an attachment larger than the old 5 MB cap', async () => {
+      // ~8 MB of payload; on the wire (base64 transfer-encoded) the stored
+      // attachment is well over 5 MB but under the raised 25 MB cap.
+      const bigPayload = 'A'.repeat(8 * 1024 * 1024);
+      await seedEmailWithAttachment('big.bin', bigPayload, {
+        subject: 'Large attachment email',
+      });
+      await waitForDelivery();
+
+      const list = await services.imapService.listEmails(TEST_ACCOUNT_NAME, {
+        subject: 'Large attachment email',
+        hasAttachment: true,
+      });
+      expect(list.items.length).toBeGreaterThanOrEqual(1);
+
+      // Default cap (no maxSizeBytes override): must succeed now that it is 25 MB.
+      const attachment = await services.imapService.downloadAttachment(
+        TEST_ACCOUNT_NAME,
+        list.items[0].id,
+        'INBOX',
+        'big.bin',
+      );
+      expect(attachment.filename).toBe('big.bin');
+      expect(attachment.size).toBeGreaterThan(5 * 1024 * 1024);
+    });
   });
 
   // ---------------------------------------------------------------------------
