@@ -119,3 +119,41 @@ export function validateInputLength(input: string, maxLength: number, fieldName:
     throw new Error(`${fieldName} exceeds maximum length of ${maxLength} characters`);
   }
 }
+
+/** Maximum total decoded size of all outgoing attachments (25 MB). */
+export const MAX_ATTACHMENTS_TOTAL_BYTES = 25 * 1024 * 1024;
+/** Maximum number of attachments per message. */
+export const MAX_ATTACHMENTS_COUNT = 20;
+
+/**
+ * Validate a list of outgoing attachments before any send.
+ * Enforces a per-message count cap, well-formed base64 for each file, and a
+ * total decoded-size cap. Throws a clear Error on any violation so the send
+ * path never reaches the transport.
+ * @param attachments - The attachments to validate.
+ */
+export function validateAttachments(
+  attachments: { filename: string; content_base64: string; mime_type?: string }[],
+): void {
+  if (attachments.length > MAX_ATTACHMENTS_COUNT) {
+    throw new Error(
+      `Too many attachments: ${attachments.length} exceeds the maximum of ${MAX_ATTACHMENTS_COUNT}`,
+    );
+  }
+
+  let totalBytes = 0;
+  attachments.forEach((attachment) => {
+    const stripped = attachment.content_base64.replace(/\s/g, '');
+    if (stripped.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(stripped)) {
+      throw new Error(`Attachment "${attachment.filename}" is not valid base64`);
+    }
+    totalBytes += Buffer.from(stripped, 'base64').length;
+  });
+
+  if (totalBytes > MAX_ATTACHMENTS_TOTAL_BYTES) {
+    throw new Error(
+      `Attachments total ${Math.round(totalBytes / 1024 / 1024)}MB exceeds the ` +
+        `${Math.round(MAX_ATTACHMENTS_TOTAL_BYTES / 1024 / 1024)}MB limit`,
+    );
+  }
+}

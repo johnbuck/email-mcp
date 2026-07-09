@@ -10,7 +10,7 @@ import type ImapService from '../services/imap.service.js';
 export default function registerAttachmentTools(server: McpServer, imapService: ImapService): void {
   server.tool(
     'download_attachment',
-    'Download an email attachment by filename. First use get_email to see available attachments and their filenames. Returns base64-encoded content for files ≤5MB.',
+    'Download an email attachment by filename. First use get_email to see available attachments and their filenames. Returns base64-encoded content for files ≤25MB.',
     {
       account: z.string().describe('Account name from list_accounts'),
       id: z.string().describe('Email ID (UID) from list_emails or get_email'),

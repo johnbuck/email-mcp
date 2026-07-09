@@ -183,6 +183,16 @@ export interface AttachmentMeta {
   size: number;
 }
 
+/**
+ * An outgoing attachment supplied inline as base64 (the only cross-host-safe
+ * shape — sender and MCP share no filesystem).
+ */
+export interface Attachment {
+  filename: string;
+  content_base64: string;
+  mime_type?: string;
+}
+
 export interface Email extends EmailMeta {
   cc?: EmailAddress[];
   bcc?: EmailAddress[];
@@ -202,6 +212,8 @@ export interface Email extends EmailMeta {
 export interface SendResult {
   messageId: string;
   status: 'sent' | 'failed';
+  /** Non-fatal issues (e.g. an original forward attachment skipped for size). */
+  warnings?: string[];
 }
 
 export interface PaginatedResult<T> {

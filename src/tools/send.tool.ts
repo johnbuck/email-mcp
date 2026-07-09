@@ -5,9 +5,21 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import audit from '../safety/audit.js';
-import { validateInputLength } from '../safety/validation.js';
+import { validateAttachments, validateInputLength } from '../safety/validation.js';
 
 import type SmtpService from '../services/smtp.service.js';
+
+/** Shared Zod schema for an inline-base64 attachment on the send-side tools. */
+const attachmentSchema = z
+  .array(
+    z.object({
+      filename: z.string().describe('Attachment file name'),
+      content_base64: z.string().describe('File bytes encoded as base64'),
+      mime_type: z.string().optional().describe('MIME type (e.g. application/pdf)'),
+    }),
+  )
+  .optional()
+  .describe('Files to attach, each inline as base64 (max 20 files, 25MB total decoded)');
 
 export default function registerSendTools(server: McpServer, smtpService: SmtpService): void {
   // ---------------------------------------------------------------------------
@@ -15,7 +27,7 @@ export default function registerSendTools(server: McpServer, smtpService: SmtpSe
   // ---------------------------------------------------------------------------
   server.tool(
     'send_email',
-    'Send a new email. Supports plain text or HTML body, CC, and BCC.',
+    'Send a new email. Supports plain text or HTML body, CC, BCC, and file attachments (inline base64).',
     {
       account: z.string().describe('Account name from list_accounts'),
       to: z.array(z.string().email()).min(1).describe('Recipient email addresses'),
@@ -24,12 +36,14 @@ export default function registerSendTools(server: McpServer, smtpService: SmtpSe
       cc: z.array(z.string().email()).optional().describe('CC recipients'),
       bcc: z.array(z.string().email()).optional().describe('BCC recipients'),
       html: z.boolean().default(false).describe('Send as HTML (default: plain text)'),
+      attachments: attachmentSchema,
     },
     { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     async (params) => {
       try {
         validateInputLength(params.subject, 998, 'Subject');
         validateInputLength(params.body, 5_000_000, 'Body');
+        validateAttachments(params.attachments ?? []);
         const result = await smtpService.sendEmail(params.account, params);
         await audit.log(
           'send_email',
@@ -72,7 +86,7 @@ export default function registerSendTools(server: McpServer, smtpService: SmtpSe
   // ---------------------------------------------------------------------------
   server.tool(
     'reply_email',
-    'Reply to an email with proper threading (In-Reply-To & References headers). Use get_email first to read the original.',
+    'Reply to an email with proper threading (In-Reply-To & References headers). Supports file attachments (inline base64). Use get_email first to read the original.',
     {
       account: z.string().describe('Account name from list_accounts'),
       emailId: z.string().describe('Email ID to reply to (from list_emails or get_email)'),
@@ -80,10 +94,12 @@ export default function registerSendTools(server: McpServer, smtpService: SmtpSe
       body: z.string().describe('Reply body content'),
       replyAll: z.boolean().default(false).describe('Reply to all recipients'),
       html: z.boolean().default(false).describe('Send as HTML'),
+      attachments: attachmentSchema,
     },
     { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     async (params) => {
       try {
+        validateAttachments(params.attachments ?? []);
         const result = await smtpService.replyToEmail(params.account, params);
         await audit.log(
           'reply_email',
@@ -126,7 +142,7 @@ export default function registerSendTools(server: McpServer, smtpService: SmtpSe
   // ---------------------------------------------------------------------------
   server.tool(
     'forward_email',
-    'Forward an email to new recipients with optional additional message. Original email is quoted below.',
+    'Forward an email to new recipients with optional additional message. The original message and its attachments are carried forward; new files may be attached (inline base64).',
     {
       account: z.string().describe('Account name from list_accounts'),
       emailId: z.string().describe('Email ID to forward (from list_emails or get_email)'),
@@ -134,10 +150,12 @@ export default function registerSendTools(server: McpServer, smtpService: SmtpSe
       to: z.array(z.string().email()).min(1).describe('Forward to these recipients'),
       body: z.string().optional().describe('Additional message above the forwarded content'),
       cc: z.array(z.string().email()).optional().describe('CC recipients'),
+      attachments: attachmentSchema,
     },
     { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     async (params) => {
       try {
+        validateAttachments(params.attachments ?? []);
         const result = await smtpService.forwardEmail(params.account, params);
         await audit.log(
           'forward_email',
@@ -145,11 +163,14 @@ export default function registerSendTools(server: McpServer, smtpService: SmtpSe
           { to: params.to, emailId: params.emailId },
           'ok',
         );
+        const warningText = result.warnings?.length
+          ? `\nWarnings:\n- ${result.warnings.join('\n- ')}`
+          : '';
         return {
           content: [
             {
               type: 'text' as const,
-              text: `✅ Email forwarded successfully!\nTo: ${params.to.join(', ')}\nMessage-ID: ${result.messageId}`,
+              text: `✅ Email forwarded successfully!\nTo: ${params.to.join(', ')}\nMessage-ID: ${result.messageId}${warningText}`,
             },
           ],
         };
