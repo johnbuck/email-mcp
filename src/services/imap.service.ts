@@ -1118,7 +1118,7 @@ export default class ImapService {
     emailId: string,
     mailbox: string,
     filename: string,
-    maxSizeBytes = 5 * 1024 * 1024,
+    maxSizeBytes = 25 * 1024 * 1024,
   ): Promise<{
     filename: string;
     mimeType: string;

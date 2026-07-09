@@ -6,8 +6,26 @@
 
 import type { IConnectionManager } from '../connections/types.js';
 import type RateLimiter from '../safety/rate-limiter.js';
-import type { SendResult } from '../types/index.js';
+import type { Attachment, SendResult } from '../types/index.js';
 import type ImapService from './imap.service.js';
+
+/** A nodemailer attachment carrying inline base64 content. */
+interface MailAttachment {
+  filename: string;
+  content: string;
+  encoding: 'base64';
+  contentType?: string;
+}
+
+/** Map inline-base64 attachments onto nodemailer's attachment shape. */
+function mapAttachments(attachments?: Attachment[]): MailAttachment[] {
+  return (attachments ?? []).map((a) => ({
+    filename: a.filename,
+    content: a.content_base64,
+    encoding: 'base64' as const,
+    ...(a.mime_type ? { contentType: a.mime_type } : {}),
+  }));
+}
 
 export default class SmtpService {
   constructor(
@@ -29,12 +47,15 @@ export default class SmtpService {
       cc?: string[];
       bcc?: string[];
       html?: boolean;
+      attachments?: Attachment[];
     },
   ): Promise<SendResult> {
     this.checkRateLimit(accountName);
 
     const account = this.connections.getAccount(accountName);
     const transport = await this.connections.getSmtpTransport(accountName);
+
+    const mapped = mapAttachments(options.attachments);
 
     const result = await transport.sendMail({
       from: account.fullName ? `"${account.fullName}" <${account.email}>` : account.email,
@@ -43,6 +64,7 @@ export default class SmtpService {
       bcc: options.bcc?.join(', '),
       subject: options.subject,
       ...(options.html ? { html: options.body } : { text: options.body }),
+      ...(mapped.length ? { attachments: mapped } : {}),
     });
 
     return {
@@ -63,6 +85,7 @@ export default class SmtpService {
       body: string;
       replyAll?: boolean;
       html?: boolean;
+      attachments?: Attachment[];
     },
   ): Promise<SendResult> {
     this.checkRateLimit(accountName);
@@ -98,6 +121,8 @@ export default class SmtpService {
 
     const transport = await this.connections.getSmtpTransport(accountName);
 
+    const mapped = mapAttachments(options.attachments);
+
     const result = await transport.sendMail({
       from: account.fullName ? `"${account.fullName}" <${account.email}>` : account.email,
       to: to.join(', '),
@@ -106,6 +131,7 @@ export default class SmtpService {
       inReplyTo: original.messageId,
       references: references.join(' '),
       ...(options.html ? { html: options.body } : { text: options.body }),
+      ...(mapped.length ? { attachments: mapped } : {}),
     });
 
     return {
@@ -126,6 +152,7 @@ export default class SmtpService {
       to: string[];
       body?: string;
       cc?: string[];
+      attachments?: Attachment[];
     },
   ): Promise<SendResult> {
     this.checkRateLimit(accountName);
@@ -151,6 +178,42 @@ export default class SmtpService {
     const originalBody = original.bodyText ?? original.bodyHtml ?? '';
     const fullBody = (options.body ?? '') + forwardHeader + originalBody;
 
+    // Carry the original message's attachments forward, fetched inline as
+    // base64. A per-file fetch failure (e.g. over the download cap) is skipped
+    // with a warning rather than failing the whole forward.
+    const originalMetas = original.attachments ?? [];
+    const settled = await Promise.allSettled(
+      originalMetas.map(async (meta) => {
+        const dl = await this.imapService.downloadAttachment(
+          accountName,
+          options.emailId,
+          options.mailbox ?? 'INBOX',
+          meta.filename,
+        );
+        return dl;
+      }),
+    );
+
+    const warnings: string[] = [];
+    const originalAttachments: MailAttachment[] = [];
+    settled.forEach((outcome, i) => {
+      if (outcome.status === 'fulfilled') {
+        const dl = outcome.value;
+        originalAttachments.push({
+          filename: dl.filename,
+          content: dl.contentBase64,
+          encoding: 'base64',
+          ...(dl.mimeType ? { contentType: dl.mimeType } : {}),
+        });
+      } else {
+        const reason =
+          outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
+        warnings.push(`Skipped original attachment "${originalMetas[i].filename}": ${reason}`);
+      }
+    });
+
+    const mapped = [...originalAttachments, ...mapAttachments(options.attachments)];
+
     const transport = await this.connections.getSmtpTransport(accountName);
 
     const result = await transport.sendMail({
@@ -159,11 +222,13 @@ export default class SmtpService {
       cc: options.cc?.join(', '),
       subject,
       text: fullBody,
+      ...(mapped.length ? { attachments: mapped } : {}),
     });
 
     return {
       messageId: result.messageId ?? '',
       status: 'sent',
+      ...(warnings.length ? { warnings } : {}),
     };
   }
 

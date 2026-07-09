@@ -173,3 +173,56 @@ describe('validateInputLength', () => {
     expect(() => validateInputLength('ab', 5, 'name')).not.toThrow();
   });
 });
+
+// spec: rejects-oversize-attachment / rejects-invalid-base64 (validation-helper level)
+describe('validateAttachments', () => {
+  // Resolved dynamically so the suite type-checks and runs before the helper
+  // exists; the `typeof === function` guard makes each case fail red until it
+  // is implemented, without coupling to a specific error message.
+  async function getValidateAttachments(): Promise<(a: unknown[]) => void> {
+    const mod = (await import('./validation.js')) as unknown as Record<string, unknown>;
+    return mod.validateAttachments as (a: unknown[]) => void;
+  }
+
+  const b64 = (s: string): string => Buffer.from(s).toString('base64');
+
+  it('is exported as a function', async () => {
+    const validateAttachments = await getValidateAttachments();
+    expect(typeof validateAttachments).toBe('function');
+  });
+
+  it('accepts a small, well-formed attachment', async () => {
+    const validateAttachments = await getValidateAttachments();
+    expect(typeof validateAttachments).toBe('function');
+    expect(() =>
+      validateAttachments([{ filename: 'a.txt', content_base64: b64('hello') }]),
+    ).not.toThrow();
+  });
+
+  it('rejects a total decoded size over 25 MB', async () => {
+    const validateAttachments = await getValidateAttachments();
+    expect(typeof validateAttachments).toBe('function');
+    const oversize = Buffer.alloc(26 * 1024 * 1024, 0x41).toString('base64');
+    expect(() =>
+      validateAttachments([{ filename: 'big.bin', content_base64: oversize }]),
+    ).toThrow();
+  });
+
+  it('rejects malformed base64', async () => {
+    const validateAttachments = await getValidateAttachments();
+    expect(typeof validateAttachments).toBe('function');
+    expect(() =>
+      validateAttachments([{ filename: 'bad.bin', content_base64: '@@@ not base64 @@@' }]),
+    ).toThrow();
+  });
+
+  it('rejects more than 20 attachments', async () => {
+    const validateAttachments = await getValidateAttachments();
+    expect(typeof validateAttachments).toBe('function');
+    const many: { filename: string; content_base64: string }[] = [];
+    for (let i = 0; i < 21; i += 1) {
+      many.push({ filename: `f${i}.txt`, content_base64: b64('x') });
+    }
+    expect(() => validateAttachments(many)).toThrow();
+  });
+});
