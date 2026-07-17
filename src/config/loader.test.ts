@@ -39,6 +39,8 @@ describe('Config Loader', () => {
       'MCP_EMAIL_SMTP_HOST',
       'MCP_EMAIL_READ_ONLY',
       'MCP_EMAIL_ACCOUNT_NAME',
+      'MCP_EMAIL_ALIASES',
+      'MCP_EMAIL_FULL_NAME',
     ]) {
       savedEnv[key] = process.env[key];
       delete process.env[key];
@@ -164,6 +166,48 @@ read_only = true
       const config = await loadConfig(path.join(tmpDir, 'nonexistent.toml'));
 
       expect(config.settings.readOnly).toBe(true);
+    });
+
+    it('adds alias accounts from MCP_EMAIL_ALIASES sharing primary credentials', async () => {
+      process.env.MCP_EMAIL_ADDRESS = 'primary@example.com';
+      process.env.MCP_EMAIL_PASSWORD = 'shared-pass';
+      process.env.MCP_EMAIL_IMAP_HOST = 'bridge';
+      process.env.MCP_EMAIL_SMTP_HOST = 'bridge';
+      process.env.MCP_EMAIL_ALIASES = 'lily:lily@agent.example.com:Lily, ops:ops@agent.example.com';
+
+      const config = await loadConfig(path.join(tmpDir, 'nonexistent.toml'));
+
+      expect(config.accounts).toHaveLength(3);
+      expect(config.accounts[0].name).toBe('default');
+      expect(config.accounts[0].email).toBe('primary@example.com');
+
+      const lily = config.accounts.find((a) => a.name === 'lily')!;
+      // sends AS its own address and authenticates SMTP/IMAP as it
+      expect(lily.email).toBe('lily@agent.example.com');
+      expect(lily.username).toBe('lily@agent.example.com');
+      expect(lily.fullName).toBe('Lily');
+      // inherits the primary account's bridge credentials + connection
+      expect(lily.password).toBe('shared-pass');
+      expect(lily.imap.host).toBe('bridge');
+      expect(lily.smtp.host).toBe('bridge');
+
+      // display name is optional
+      const ops = config.accounts.find((a) => a.name === 'ops')!;
+      expect(ops.email).toBe('ops@agent.example.com');
+      expect(ops.username).toBe('ops@agent.example.com');
+    });
+
+    it('ignores MCP_EMAIL_ALIASES entries missing an email', async () => {
+      process.env.MCP_EMAIL_ADDRESS = 'primary@example.com';
+      process.env.MCP_EMAIL_PASSWORD = 'shared-pass';
+      process.env.MCP_EMAIL_IMAP_HOST = 'bridge';
+      process.env.MCP_EMAIL_SMTP_HOST = 'bridge';
+      process.env.MCP_EMAIL_ALIASES = 'brokenentry, ,valid:valid@agent.example.com';
+
+      const config = await loadConfig(path.join(tmpDir, 'nonexistent.toml'));
+
+      expect(config.accounts).toHaveLength(2);
+      expect(config.accounts.map((a) => a.name)).toEqual(['default', 'valid']);
     });
   });
 

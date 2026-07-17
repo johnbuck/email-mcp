@@ -42,6 +42,63 @@ function loadFromEnv(): RawAppConfig | null {
       }
     : undefined;
 
+  const imap = {
+    host: imapHost,
+    port: parseInt(process.env.MCP_EMAIL_IMAP_PORT ?? '993', 10),
+    tls: process.env.MCP_EMAIL_IMAP_TLS !== 'false',
+    starttls: process.env.MCP_EMAIL_IMAP_STARTTLS === 'true',
+    verify_ssl: process.env.MCP_EMAIL_IMAP_VERIFY_SSL !== 'false',
+  };
+
+  const smtp = {
+    host: smtpHost,
+    port: parseInt(process.env.MCP_EMAIL_SMTP_PORT ?? '465', 10),
+    tls: process.env.MCP_EMAIL_SMTP_TLS !== 'false',
+    starttls: process.env.MCP_EMAIL_SMTP_STARTTLS === 'true',
+    verify_ssl: process.env.MCP_EMAIL_SMTP_VERIFY_SSL !== 'false',
+    pool: {
+      enabled: process.env.MCP_EMAIL_SMTP_POOL_ENABLED !== 'false',
+      max_connections: parseInt(process.env.MCP_EMAIL_SMTP_POOL_MAX_CONNECTIONS ?? '1', 10),
+      max_messages: parseInt(process.env.MCP_EMAIL_SMTP_POOL_MAX_MESSAGES ?? '100', 10),
+    },
+  };
+
+  const primaryAccount = {
+    name: process.env.MCP_EMAIL_ACCOUNT_NAME ?? 'default',
+    email,
+    full_name: process.env.MCP_EMAIL_FULL_NAME,
+    username: process.env.MCP_EMAIL_USERNAME,
+    password,
+    oauth2,
+    imap,
+    smtp,
+  };
+
+  // Additional send-from identities that share the primary account's bridge
+  // credentials and connection (e.g. Proton custom-domain addresses on the same
+  // bridge account). Format: MCP_EMAIL_ALIASES="name:email[:Display Name],...".
+  // Each alias authenticates as its own address (username = email); the Proton
+  // Bridge accepts that for any active address on the account.
+  const aliasAccounts = (process.env.MCP_EMAIL_ALIASES ?? '')
+    .split(',')
+    .map((spec) => spec.trim())
+    .filter(Boolean)
+    .map((spec) => {
+      const parts = spec.split(':').map((p) => p.trim());
+      return { aliasName: parts[0], aliasEmail: parts[1], display: parts.slice(2).join(':').trim() };
+    })
+    .filter((a) => a.aliasName && a.aliasEmail)
+    .map(({ aliasName, aliasEmail, display }) => ({
+      name: aliasName,
+      email: aliasEmail,
+      full_name: display || process.env.MCP_EMAIL_FULL_NAME,
+      username: aliasEmail,
+      password,
+      oauth2,
+      imap,
+      smtp,
+    }));
+
   return {
     settings: {
       rate_limit: parseInt(process.env.MCP_EMAIL_RATE_LIMIT ?? '10', 10),
@@ -90,35 +147,7 @@ function loadFromEnv(): RawAppConfig | null {
         calendar_confirm: process.env.MCP_EMAIL_HOOK_CALENDAR_CONFIRM !== 'false',
       },
     },
-    accounts: [
-      {
-        name: process.env.MCP_EMAIL_ACCOUNT_NAME ?? 'default',
-        email,
-        full_name: process.env.MCP_EMAIL_FULL_NAME,
-        username: process.env.MCP_EMAIL_USERNAME,
-        password,
-        oauth2,
-        imap: {
-          host: imapHost,
-          port: parseInt(process.env.MCP_EMAIL_IMAP_PORT ?? '993', 10),
-          tls: process.env.MCP_EMAIL_IMAP_TLS !== 'false',
-          starttls: process.env.MCP_EMAIL_IMAP_STARTTLS === 'true',
-          verify_ssl: process.env.MCP_EMAIL_IMAP_VERIFY_SSL !== 'false',
-        },
-        smtp: {
-          host: smtpHost,
-          port: parseInt(process.env.MCP_EMAIL_SMTP_PORT ?? '465', 10),
-          tls: process.env.MCP_EMAIL_SMTP_TLS !== 'false',
-          starttls: process.env.MCP_EMAIL_SMTP_STARTTLS === 'true',
-          verify_ssl: process.env.MCP_EMAIL_SMTP_VERIFY_SSL !== 'false',
-          pool: {
-            enabled: process.env.MCP_EMAIL_SMTP_POOL_ENABLED !== 'false',
-            max_connections: parseInt(process.env.MCP_EMAIL_SMTP_POOL_MAX_CONNECTIONS ?? '1', 10),
-            max_messages: parseInt(process.env.MCP_EMAIL_SMTP_POOL_MAX_MESSAGES ?? '100', 10),
-          },
-        },
-      },
-    ],
+    accounts: [primaryAccount, ...aliasAccounts],
   };
 }
 
