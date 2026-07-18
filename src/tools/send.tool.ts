@@ -5,6 +5,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import audit from '../safety/audit.js';
+import { emailSummary, requestSendApproval } from '../safety/send-approval.js';
 import { validateAttachments, validateInputLength } from '../safety/validation.js';
 
 import type SmtpService from '../services/smtp.service.js';
@@ -44,6 +45,27 @@ export default function registerSendTools(server: McpServer, smtpService: SmtpSe
         validateInputLength(params.subject, 998, 'Subject');
         validateInputLength(params.body, 5_000_000, 'Body');
         validateAttachments(params.attachments ?? []);
+        const approval = await requestSendApproval(
+          server,
+          'sending this email',
+          emailSummary({
+            account: params.account,
+            to: params.to,
+            cc: params.cc,
+            subject: params.subject,
+            body: params.body,
+          }),
+        );
+        if (!approval.approved) {
+          await audit.log(
+            'send_email',
+            params.account,
+            { to: params.to, subject: params.subject },
+            'error',
+            approval.reason,
+          );
+          return { content: [{ type: 'text' as const, text: `🚫 ${approval.reason}` }] };
+        }
         const result = await smtpService.sendEmail(params.account, params);
         await audit.log(
           'send_email',
@@ -100,6 +122,25 @@ export default function registerSendTools(server: McpServer, smtpService: SmtpSe
     async (params) => {
       try {
         validateAttachments(params.attachments ?? []);
+        const approval = await requestSendApproval(
+          server,
+          'sending this reply',
+          emailSummary({
+            account: params.account,
+            note: `Reply to email ${params.emailId} in ${params.mailbox}${params.replyAll ? ' (reply-all)' : ''}`,
+            body: params.body,
+          }),
+        );
+        if (!approval.approved) {
+          await audit.log(
+            'reply_email',
+            params.account,
+            { emailId: params.emailId, mailbox: params.mailbox },
+            'error',
+            approval.reason,
+          );
+          return { content: [{ type: 'text' as const, text: `🚫 ${approval.reason}` }] };
+        }
         const result = await smtpService.replyToEmail(params.account, params);
         await audit.log(
           'reply_email',
@@ -156,6 +197,27 @@ export default function registerSendTools(server: McpServer, smtpService: SmtpSe
     async (params) => {
       try {
         validateAttachments(params.attachments ?? []);
+        const approval = await requestSendApproval(
+          server,
+          'forwarding this email',
+          emailSummary({
+            account: params.account,
+            to: params.to,
+            cc: params.cc,
+            note: `Forwarding email ${params.emailId} from ${params.mailbox}`,
+            body: params.body,
+          }),
+        );
+        if (!approval.approved) {
+          await audit.log(
+            'forward_email',
+            params.account,
+            { to: params.to, emailId: params.emailId },
+            'error',
+            approval.reason,
+          );
+          return { content: [{ type: 'text' as const, text: `🚫 ${approval.reason}` }] };
+        }
         const result = await smtpService.forwardEmail(params.account, params);
         await audit.log(
           'forward_email',
