@@ -145,6 +145,9 @@ describe('send approval gate (MCP_EMAIL_SEND_APPROVAL=elicit)', () => {
     expect(arg.requestedSchema.required ?? []).toEqual([]);
     expect(arg.message).toContain('r@example.com');
     expect(arg.message).toContain('Hi');
+    // A generous approval window (>60s default) so a human can actually approve.
+    const opts = elicit.mock.calls[0][1] as { timeout?: number };
+    expect(opts.timeout ?? 0).toBeGreaterThan(60_000);
     expect(smtp.sendEmail).toHaveBeenCalledTimes(1);
     expect(res.isError).toBeFalsy();
   });

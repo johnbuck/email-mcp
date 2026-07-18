@@ -19,6 +19,16 @@ export function sendApprovalEnabled(): boolean {
   return process.env.MCP_EMAIL_SEND_APPROVAL === 'elicit';
 }
 
+/**
+ * How long to wait for the human to approve, in ms. The MCP request default is
+ * only 60s — far too short for a person to review and tap Approve — so we give a
+ * generous window (default 10 min), overridable via MCP_EMAIL_APPROVAL_TIMEOUT_MS.
+ */
+export function approvalTimeoutMs(): number {
+  const v = Number.parseInt(process.env.MCP_EMAIL_APPROVAL_TIMEOUT_MS ?? '', 10);
+  return Number.isFinite(v) && v > 0 ? v : 600_000;
+}
+
 export interface ApprovalOutcome {
   approved: boolean;
   reason?: string;
@@ -37,11 +47,14 @@ export async function requestSendApproval(
   if (!sendApprovalEnabled()) return { approved: true };
 
   try {
-    const result = await server.server.elicitInput({
-      mode: 'form',
-      message: `Approve ${action}?\n\n${details}`,
-      requestedSchema: { type: 'object', properties: {} },
-    });
+    const result = await server.server.elicitInput(
+      {
+        mode: 'form',
+        message: `Approve ${action}?\n\n${details}`,
+        requestedSchema: { type: 'object', properties: {} },
+      },
+      { timeout: approvalTimeoutMs(), resetTimeoutOnProgress: false },
+    );
     if (result.action === 'accept') return { approved: true };
     const verb = result.action === 'decline' ? 'declined' : 'cancelled';
     return { approved: false, reason: `Send ${verb} — email was NOT sent.` };
